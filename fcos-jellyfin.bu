@@ -1,0 +1,104 @@
+variant: fcos
+version: 1.5.0
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIUIwy8XFuyhN59WofZoE64ltan1lKraY2RxAevZtoz elvisdiniz@dell-g5
+        - ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBM1VIl4Xszo4O16fpJS7ECjso1poTJikbKpuMU42xrOiBvey/dCJKJ7hHl7Y+XulfVTLSflqasWjV/cF9d7RgBQ= elvisdiniz@iphone
+
+storage:
+  directories:
+    - path: /var/lib/jellyfin
+      mode: 0775
+    - path: /usr/local/lib/jellyfin-ffmpeg
+      mode: 0755
+  
+  files:
+    # 1. Add RPM Fusion Repositories for Nvidia Drivers
+    - path: /etc/yum.repos.d/rpmfusion-nonfree-nvidia-driver.repo
+      contents:
+        source: https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+    
+    # 2. Add Nvidia Container Toolkit Repo
+    - path: /etc/yum.repos.d/nvidia-container-toolkit.repo
+      contents:
+        inline: |
+          [nvidia-container-toolkit]
+          name=nvidia-container-toolkit
+          baseurl=https://nvidia.github.io/libnvidia-container/stable/rpm/$basearch/
+          repo_gpgcheck=1
+          gpgcheck=0
+          enabled=1
+          gpgkey=https://nvidia.github.io/libnvidia-container/gpgkey
+
+systemd:
+  units:
+    # Service to layer Nvidia Drivers (Triggers Reboot)
+    - name: rpm-ostree-install-nvidia.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Layer Nvidia Drivers and Toolkit
+        ConditionPathExists=!/var/lib/nvidia-drivers-installed
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/rpm-ostree install akmod-nvidia xorg-x11-drv-nvidia-cuda nvidia-container-toolkit
+        ExecStartPost=/usr/bin/touch /var/lib/nvidia-drivers-installed
+        ExecStartPost=/usr/bin/systemctl reboot
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # 3. Automatically download and extract Jellyfin-FFmpeg
+    - name: install-jellyfin-ffmpeg.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Download Jellyfin-FFmpeg Static Binary
+        After=network-online.target
+        ConditionPathExists=!/usr/local/lib/jellyfin-ffmpeg/ffmpeg
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        # Replace the URL below if a newer version is released
+        ExecStartPre=/usr/bin/mkdir -p /tmp/jellyfin-ffmpeg
+        ExecStart=/usr/bin/curl -L https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v7.0.2-9/jellyfin-ffmpeg_7.0.2-9_linux64-gpl.tar.xz -o /tmp/jellyfin-ffmpeg.tar.xz
+        ExecStart=/usr/bin/tar -xJf /tmp/jellyfin-ffmpeg.tar.xz -C /usr/local/lib/jellyfin-ffmpeg --strip-components=1
+        ExecStartPost=/usr/bin/rm /tmp/jellyfin-ffmpeg.tar.xz
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # 4. Jellyfin Container Service
+    - name: jellyfin.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Jellyfin Media Server
+        After=rpm-ostree-install-nvidia.service install-jellyfin-ffmpeg.service
+        Requires=network-online.target
+
+        [Service]
+        TimeoutStartSec=0
+        Restart=always
+        ExecStartPre=-/usr/bin/podman stop %n
+        ExecStartPre=-/usr/bin/podman rm %n
+        ExecStart=/usr/bin/podman run \
+          --name jellyfin \
+          --net=host \
+          --device nvidia.com/gpu=all \
+          --security-opt label=disable \
+          -v /var/lib/jellyfin/config:/config:Z \
+          -v /var/lib/jellyfin/cache:/cache:Z \
+          -v /mnt/media:/media:ro \
+          -v /usr/local/lib/jellyfin-ffmpeg:/usr/lib/jellyfin-ffmpeg:ro \
+          jellyfin/jellyfin:latest
+
+        [Install]
+        WantedBy=multi-user.target

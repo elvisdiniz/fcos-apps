@@ -1,0 +1,62 @@
+{
+  "ignition": {
+    "version": "3.4.0"
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "core",
+        "sshAuthorizedKeys": [
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIUIwy8XFuyhN59WofZoE64ltan1lKraY2RxAevZtoz elvisdiniz@dell-g5",
+          "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBM1VIl4Xszo4O16fpJS7ECjso1poTJikbKpuMU42xrOiBvey/dCJKJ7hHl7Y+XulfVTLSflqasWjV/cF9d7RgBQ= elvisdiniz@iphone"
+        ]
+      }
+    ]
+  },
+  "storage": {
+    "directories": [
+      {
+        "path": "/var/lib/jellyfin",
+        "mode": 509
+      },
+      {
+        "path": "/usr/local/lib/jellyfin-ffmpeg",
+        "mode": 493
+      }
+    ],
+    "files": [
+      {
+        "path": "/etc/yum.repos.d/rpmfusion-nonfree-nvidia-driver.repo",
+        "contents": {
+          "source": "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+        }
+      },
+      {
+        "path": "/etc/yum.repos.d/nvidia-container-toolkit.repo",
+        "contents": {
+          "compression": "gzip",
+          "source": "data:;base64,H4sIAAAAAAAC/5SNwQrCMBBE7/sdXtvVq9AvEZFNuiRL0iRstoJ/LyXgQfDgbZiZN3MrT1mFJl+LkRTWyWrNSewOhTZefsXgqPOueYlmrV8RR3EOYnF3s1TM4r5h7EYuM2rb8HQMkPqIoNzqI7TgI/u0XOAjz8DlANZhJn79dzcYeAcAAP//Nx3apeQAAAA="
+        }
+      }
+    ]
+  },
+  "systemd": {
+    "units": [
+      {
+        "contents": "[Unit]\nDescription=Layer Nvidia Drivers and Toolkit\nConditionPathExists=!/var/lib/nvidia-drivers-installed\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/usr/bin/rpm-ostree install akmod-nvidia xorg-x11-drv-nvidia-cuda nvidia-container-toolkit\nExecStartPost=/usr/bin/touch /var/lib/nvidia-drivers-installed\nExecStartPost=/usr/bin/systemctl reboot\n\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "rpm-ostree-install-nvidia.service"
+      },
+      {
+        "contents": "[Unit]\nDescription=Download Jellyfin-FFmpeg Static Binary\nAfter=network-online.target\nConditionPathExists=!/usr/local/lib/jellyfin-ffmpeg/ffmpeg\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\n# Replace the URL below if a newer version is released\nExecStartPre=/usr/bin/mkdir -p /tmp/jellyfin-ffmpeg\nExecStart=/usr/bin/curl -L https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v7.0.2-9/jellyfin-ffmpeg_7.0.2-9_linux64-gpl.tar.xz -o /tmp/jellyfin-ffmpeg.tar.xz\nExecStart=/usr/bin/tar -xJf /tmp/jellyfin-ffmpeg.tar.xz -C /usr/local/lib/jellyfin-ffmpeg --strip-components=1\nExecStartPost=/usr/bin/rm /tmp/jellyfin-ffmpeg.tar.xz\n\n[Install]\nWantedBy=multi-user.target\n",
+        "enabled": true,
+        "name": "install-jellyfin-ffmpeg.service"
+      },
+      {
+        "contents": "[Unit]\nDescription=Jellyfin Media Server\nAfter=rpm-ostree-install-nvidia.service install-jellyfin-ffmpeg.service\nRequires=network-online.target\n\n[Service]\nTimeoutStartSec=0\nRestart=always\nExecStartPre=-/usr/bin/podman stop %n\nExecStartPre=-/usr/bin/podman rm %n\nExecStart=/usr/bin/podman run \\\n  --name jellyfin \\\n  --net=host \\\n  --device nvidia.com/gpu=all \\\n  --security-opt label=disable \\\n  -v /var/lib/jellyfin/config:/config:Z \\\n  -v /var/lib/jellyfin/cache:/cache:Z \\\n  -v /mnt/media:/media:ro \\\n  -v /usr/local/lib/jellyfin-ffmpeg:/usr/lib/jellyfin-ffmpeg:ro \\\n  jellyfin/jellyfin:latest\n\n[Install]\nWantedBy=multi-user.target",
+        "enabled": true,
+        "name": "jellyfin.service"
+      }
+    ]
+  }
+}
